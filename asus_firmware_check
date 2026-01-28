@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+UM5606_MODEL="WA"
+HELPDESK_URL=""
+
+check_model() {	
+	case $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null) in
+	    *UM5606GA*)
+	        UM5606_MODEL="GA"
+	        ;;
+	    *UM5606KA*)
+	        UM5606_MODEL="KA"
+	        ;;
+	    *UM5606WA*)
+	        UM5606_MODEL="WA"
+	        ;;
+	    *)
+	        echo "Error: Unknown model or could not read product name, defaulting to UM5606WA" >&2
+	        ;;
+	esac
+
+	HELPDESK_URL="https://www.asus.com/us/laptops/for-home/zenbook/asus-zenbook-s-16-um5606/helpdesk_bios?model2Name=UM5606${UM5606_MODEL}"
+}
+
+update_file() {
+	if [ -f $HOME/.cache/um5606-bios.txt.new ]; then
+		mv $HOME/.cache/um5606-bios.txt.new $HOME/.cache/um5606-bios.txt
+	fi
+}
+
+send_notification() {
+    icon_path="/usr/share/icons/hicolor/512x512/apps/asus_notif_red.png"
+    icon_arg=""
+    [[ -f "$icon_path" ]] && icon_arg="-i $icon_path"
+    
+    local fd_file
+    exec {fd_file}<> <(:)
+    
+    notify-send "New ASUS BIOS!" "$(head -1 $HOME/.cache/um5606-bios.txt)" \
+        -u critical $icon_arg -c device \
+        --action="default=Download" \
+        --selected-action-fd=$fd_file &
+    
+    (
+        read -u $fd_file -t 20 selected_action
+        if [[ "$selected_action" == "default" ]]; then
+            xdg-open "$HELPDESK_URL" 2>/dev/null
+        fi
+        exec {fd_file}>&-
+    ) &
+}
+
+new_bios() {
+	update_file
+	
+	echo "!!! NEW BIOS VERSION !!!"
+	head -2 $HOME/.cache/um5606-bios.txt
+	echo
+	echo "Download at: $HELPDESK_URL"
+
+	if [ -x "$(command -v notify-send)" ]; then
+	  	send_notification
+	fi
+}
+
+check_for_bios() {
+	check_model
+
+	curl -sS "$HELPDESK_URL" \
+         -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+         -H 'accept-language: en-US,en;q=0.9' \
+         -H 'cache-control: no-cache' \
+         -b 'isReadCookiePolicyDNT=Yes; isReadCookiePolicyDNTAa=true; isCookiePolicyAnalytics=true; isCookiePolicyVideo=true' \
+         -H 'pragma: no-cache' | awk '/BIOS for ASUS EZ Flash Utility/,/SHA-256/' | grep -oP '(Version \d+|SHA-256 ：[A-F0-9]+)' > $HOME/.cache/um5606-bios.txt.new
+
+	if [ -f $HOME/.cache/um5606-bios.txt ]; then
+    	cmp --silent $HOME/.cache/um5606-bios.txt.new $HOME/.cache/um5606-bios.txt || new_bios
+	fi
+
+	update_file
+}
+
+check_for_bios
