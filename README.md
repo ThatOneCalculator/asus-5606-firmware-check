@@ -1,4 +1,4 @@
-# asus-5606-firmware-checker
+# ASUS UM5606 Firmware Update Checker
 Dead-simple bash script to check if the UM5606 laptop has a BIOS update
 
 ## Models supported
