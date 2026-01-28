@@ -13,5 +13,9 @@ Dead-simple bash script to check if the UM5606 laptop has a BIOS update
 - grep
 - notify-send (optional)
 
+## Installation
+- Arch Linux: `yay -S asus-5606-firmware-check-git`
+- All others: copy `asus_firmware_check` to anywhere in `$PATH`
+
 ## Usage
 Just run `asus_firmware_check`. If there's an update, it'll tell you. If not, it'll exit with 0.
