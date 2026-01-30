@@ -9,8 +9,7 @@ Dead-simple bash script to check if the UM5606 laptop has a BIOS update
 ## Dependencies
 - bash
 - curl
-- awk
-- grep
+- coreutils
 - notify-send (optional)
 
 ## Installation
