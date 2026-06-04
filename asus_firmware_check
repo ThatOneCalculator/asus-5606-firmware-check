@@ -1,83 +1,103 @@
 #!/usr/bin/env bash
+set -o pipefail
 
-UM5606_MODEL="WA"
+MODEL="UM5606WA"
+ASUS_LOCALE="${ASUS_LOCALE:-de}"
 HELPDESK_URL=""
+CURRENT_BIOS_VERSION=""
+LATEST_BIOS_VERSION=""
+LATEST_BIOS_SHA=""
 
-check_model() {	
-	case $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null) in
-	    *UM5606GA*)
-	        UM5606_MODEL="GA"
-	        ;;
-	    *UM5606KA*)
-	        UM5606_MODEL="KA"
-	        ;;
-	    *UM5606WA*)
-	        UM5606_MODEL="WA"
-	        ;;
-	    *)
-	        echo "Error: Unknown model or could not read product name, defaulting to UM5606WA" >&2
-	        ;;
-	esac
+check_model() {
+	local detected_model
+	detected_model="$(grep -oE 'UM5606(GA|KA|WA)' /sys/devices/virtual/dmi/id/product_name 2>/dev/null | head -n1 || true)"
+	if [ -n "$detected_model" ]; then
+		MODEL="$detected_model"
+	else
+		echo "Error: Unknown model or could not read product name, defaulting to $MODEL" >&2
+	fi
 
-	HELPDESK_URL="https://www.asus.com/us/laptops/for-home/zenbook/asus-zenbook-s-16-um5606/helpdesk_bios?model2Name=UM5606${UM5606_MODEL}"
+	HELPDESK_URL="https://www.asus.com/${ASUS_LOCALE}/supportonly/${MODEL,,}/helpdesk_bios/"
 }
 
-update_file() {
-	if [ -f $HOME/.cache/um5606-bios.txt.new ]; then
-		mv $HOME/.cache/um5606-bios.txt.new $HOME/.cache/um5606-bios.txt
+get_current_bios_version() {
+	CURRENT_BIOS_VERSION="$(grep -oE '[0-9]+$' /sys/devices/virtual/dmi/id/bios_version 2>/dev/null || true)"
+	if [ -z "$CURRENT_BIOS_VERSION" ]; then
+		echo "Error: Could not read installed BIOS version from /sys/devices/virtual/dmi/id/bios_version" >&2
+		return 1
+	fi
+}
+
+fetch_latest_bios() {
+	local bios_data
+
+	if ! bios_data="$(curl -fsSL "$HELPDESK_URL" \
+		-H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+		-H 'accept-language: en-US,en;q=0.9' \
+		-H 'cache-control: no-cache' \
+		-b 'isReadCookiePolicyDNT=Yes; isReadCookiePolicyDNTAa=true; isCookiePolicyAnalytics=true; isCookiePolicyVideo=true' \
+		-H 'pragma: no-cache' | awk '/BIOS for ASUS EZ Flash Utility/,/SHA-256/' | grep -oE '(Version [0-9]+|SHA-256 ：[A-F0-9]+)')"; then
+		echo "Error: Could not fetch or parse BIOS data from $HELPDESK_URL" >&2
+		return 1
+	fi
+
+	if [ -z "$bios_data" ]; then
+		echo "Error: No BIOS data found at $HELPDESK_URL" >&2
+		return 1
+	fi
+
+	LATEST_BIOS_VERSION="$(awk 'NR == 1 && /^Version [0-9]+$/ { print $2 }' <<< "$bios_data")"
+	LATEST_BIOS_SHA="$(awk 'NR == 2 && /^SHA-256/ { print }' <<< "$bios_data")"
+	if [ -z "$LATEST_BIOS_VERSION" ]; then
+		echo "Error: Could not determine latest BIOS version from $HELPDESK_URL" >&2
+		return 1
 	fi
 }
 
 send_notification() {
-    icon_path="/usr/share/icons/hicolor/512x512/apps/asus_notif_red.png"
-    icon_arg=""
-    [[ -f "$icon_path" ]] && icon_arg="-i $icon_path"
-    
-    local fd_file
-    exec {fd_file}<> <(:)
-    
-    notify-send "New ASUS BIOS!" "$(head -1 $HOME/.cache/um5606-bios.txt)" \
-        -u critical $icon_arg -c device \
-        --action="default=Download" \
-        --selected-action-fd=$fd_file &
-    
-    (
-        read -u $fd_file -t 20 selected_action
-        if [[ "$selected_action" == "default" ]]; then
-            xdg-open "$HELPDESK_URL" 2>/dev/null
-        fi
-        exec {fd_file}>&-
-    ) &
+	local message
+	message="Installed Version $CURRENT_BIOS_VERSION, latest Version $LATEST_BIOS_VERSION"
+
+	local fd_file
+	exec {fd_file}<> <(:)
+
+	notify-send "ASUS BIOS update available" "$message" \
+		-u critical -i dialog-warning -c device \
+		--action="default=Download" \
+		--selected-action-fd=$fd_file &
+
+	(
+		read -r -u "$fd_file" -t 20 selected_action
+		if [[ "$selected_action" == "default" ]]; then
+			xdg-open "$HELPDESK_URL" 2>/dev/null
+		fi
+		exec {fd_file}>&-
+	) &
 }
 
 new_bios() {
-	update_file
-	
-	echo "!!! NEW BIOS VERSION !!!"
-	head -2 $HOME/.cache/um5606-bios.txt
+	echo "!!! BIOS UPDATE AVAILABLE !!!"
+	echo "Installed BIOS: Version $CURRENT_BIOS_VERSION"
+	echo "Latest ASUS BIOS: Version $LATEST_BIOS_VERSION"
+	if [ -n "$LATEST_BIOS_SHA" ]; then
+		echo "$LATEST_BIOS_SHA"
+	fi
 	echo
 	echo "Download at: $HELPDESK_URL"
 
-	if [ -x "$(command -v notify-send)" ]; then
-	  	send_notification
+	if command -v notify-send >/dev/null 2>&1; then
+		send_notification
 	fi
 }
 
 check_for_bios() {
 	check_model
+	get_current_bios_version || return 1
+	fetch_latest_bios || return 1
 
-	curl -sS "$HELPDESK_URL" \
-         -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
-         -H 'accept-language: en-US,en;q=0.9' \
-         -H 'cache-control: no-cache' \
-         -b 'isReadCookiePolicyDNT=Yes; isReadCookiePolicyDNTAa=true; isCookiePolicyAnalytics=true; isCookiePolicyVideo=true' \
-         -H 'pragma: no-cache' | awk '/BIOS for ASUS EZ Flash Utility/,/SHA-256/' | grep -oP '(Version \d+|SHA-256 ：[A-F0-9]+)' > $HOME/.cache/um5606-bios.txt.new
-
-	if [ -f $HOME/.cache/um5606-bios.txt ]; then
-    	cmp --silent $HOME/.cache/um5606-bios.txt.new $HOME/.cache/um5606-bios.txt || new_bios
+	if ((10#$LATEST_BIOS_VERSION > 10#$CURRENT_BIOS_VERSION)); then
+		new_bios
 	fi
-
-	update_file
 }
 
 check_for_bios
