@@ -1,5 +1,5 @@
 # ASUS UM5606 Firmware Update Checker
-Dead-simple bash script to check if the UM5606 laptop has a BIOS update
+Dead-simple bash script to compare the installed UM5606 BIOS version against the latest BIOS version listed by ASUS.
 
 ## Models supported
 - UM5606WA (tested)
@@ -10,6 +10,8 @@ Dead-simple bash script to check if the UM5606 laptop has a BIOS update
 - bash
 - curl
 - coreutils
+- grep
+- awk
 - notify-send (optional)
 
 ## Installation
